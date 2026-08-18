@@ -2,8 +2,8 @@
 name=Aeternum Aquae - Estaciones Climatológicas (México)
 qgisMinimumVersion=3.0
 qgisMaximumVersion=4.99
-description=Consulta y extracción espacial de estaciones climatológicas de México desde Supabase con buffer, selección de columnas y cálculo IDF.
-version=1.0.0
+description=Query and spatial extraction of Mexican climatological stations from Supabase with buffer analysis, attribute selection, and dynamic IDF curve computation.
+version=1.0.2
 author=Andrés Rocha Pérez
 email=andres.rocha12@outlook.com
 about=Complemento para QGIS desarrollado para facilitar la consulta y el procesamiento de información de estaciones climatológicas de México mediante una base de datos pública alojada en Supabase. Permite localizar y filtrar estaciones por estado, municipio o polígono de proyecto, establecer áreas de influencia mediante buffers, seleccionar variables climatológicas específicas y realizar el cálculo de intensidades de precipitación mediante curvas IDF. El desarrollo y la metodología implementada se fundamentan en la investigación "Mass Processing of Mexican Climatological Stations" de Pérez, A. R. (2026), disponible en OSF (https://osf.io/ar6x3).

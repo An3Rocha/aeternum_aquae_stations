@@ -4,26 +4,15 @@ Main GUI Dialog for Aeternum Aquae QGIS Plugin
 Compatible with QGIS 3 and QGIS 4 (PyQt5 / PyQt6)
 """
 
-try:
-    from PyQt6.QtWidgets import (
-        QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
-        QDoubleSpinBox, QCheckBox, QTabWidget, QWidget, QGroupBox,
-        QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-        QProgressBar, QLineEdit, QSplitter, QFileDialog, QRadioButton, QButtonGroup,
-        QScrollArea, QGridLayout
-    )
-    from PyQt6.QtCore import Qt, QThread, pyqtSignal
-    from PyQt6.QtGui import QIcon, QFont, QColor
-except ImportError:
-    from PyQt5.QtWidgets import (
-        QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
-        QDoubleSpinBox, QCheckBox, QTabWidget, QWidget, QGroupBox,
-        QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
-        QProgressBar, QLineEdit, QSplitter, QFileDialog, QRadioButton, QButtonGroup,
-        QScrollArea, QGridLayout
-    )
-    from PyQt5.QtCore import Qt, QThread, pyqtSignal
-    from PyQt5.QtGui import QIcon, QFont, QColor
+from qgis.PyQt.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton,
+    QDoubleSpinBox, QCheckBox, QTabWidget, QWidget, QGroupBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
+    QProgressBar, QLineEdit, QSplitter, QFileDialog, QRadioButton, QButtonGroup,
+    QScrollArea, QGridLayout
+)
+from qgis.PyQt.QtCore import Qt, QThread, pyqtSignal, QVariant
+from qgis.PyQt.QtGui import QIcon, QFont, QColor
 
 from qgis.core import (
     QgsProject, QgsVectorLayer, QgsFeature, QgsGeometry, QgsField,
@@ -105,7 +94,7 @@ class StationsFetchWorker(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, client, filter_mode, state, municipio, layer_geojson, buffer_meters, selected_cols, calc_intensities, durations, trs):
+    def __init__(self, client, filter_mode, state, municipio, layer_geojson, buffer_meters, selected_cols, calc_intensities, durations, trs, filter_processed=True):
         super().__init__()
         self.client = client
         self.filter_mode = filter_mode
@@ -117,6 +106,7 @@ class StationsFetchWorker(QThread):
         self.calc_intensities = calc_intensities
         self.durations = durations
         self.trs = trs
+        self.filter_processed = filter_processed
 
     def run(self):
         try:
@@ -136,8 +126,27 @@ class StationsFetchWorker(QThread):
                     municipio=self.municipio
                 )
             
-            features = data.get("features", [])
-            self.progress.emit(f"Recibidas {len(features)} estaciones. Procesando atributos...")
+            raw_features = data.get("features", [])
+            
+            # Filtrar estaciones sin procesamiento estadístico / parámetros IDF si se solicita
+            if self.filter_processed:
+                features = [
+                    f for f in raw_features
+                    if (
+                        f.get("properties", {}).get("formula_i")
+                        or (
+                            f.get("properties", {}).get("chen_a") is not None
+                            and f.get("properties", {}).get("chen_b") is not None
+                            and f.get("properties", {}).get("chen_c") is not None
+                        )
+                        or f.get("properties", {}).get("tr2") is not None
+                        or f.get("properties", {}).get("modelo") is not None
+                    )
+                ]
+                self.progress.emit(f"Recibidas {len(raw_features)} estaciones. {len(features)} con ajuste estadístico. Procesando...")
+            else:
+                features = raw_features
+                self.progress.emit(f"Recibidas {len(features)} estaciones. Procesando atributos...")
 
             # Process column filter and dynamic intensities
             processed_features = []
@@ -247,13 +256,7 @@ class AeternumAquaeDialog(QDialog):
         layer_row = QHBoxLayout()
         layer_row.addWidget(QLabel("Capa Poligonal:"))
         self.cb_layer = QgsMapLayerComboBox()
-        try:
-            self.cb_layer.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
-        except (AttributeError, TypeError):
-            try:
-                self.cb_layer.setFilters(QgsMapLayerProxyModel.PolygonLayer)
-            except Exception:
-                pass
+        self.cb_layer.setFilters(QgsMapLayerProxyModel.Filter.PolygonLayer)
         layer_row.addWidget(self.cb_layer, stretch=1)
 
         self.chk_selected_only = QCheckBox("Solo geometrías seleccionadas")
@@ -332,6 +335,14 @@ class AeternumAquaeDialog(QDialog):
         self.chk_enable_calc = QCheckBox("⚡ Calcular Intensidades IDF automáticamente al cargar la capa")
         self.chk_enable_calc.setChecked(True)
         tab_calc_layout.addWidget(self.chk_enable_calc)
+
+        self.chk_filter_processed = QCheckBox("🎯 Excluir estaciones sin procesamiento de ajuste probabilístico / parámetros IDF")
+        self.chk_filter_processed.setChecked(True)
+        self.chk_filter_processed.setToolTip(
+            "Omite aquellas estaciones que no alcanzaron el mínimo de años con registros válidos "
+            "y que por ende no cuentan con coeficientes de Chen ni ajuste de distribución estadística."
+        )
+        tab_calc_layout.addWidget(self.chk_filter_processed)
 
         gb_calc_params = QGroupBox("Parámetros de Cálculo de Intensidad i (mm/hr)")
         gb_calc_layout = QVBoxLayout(gb_calc_params)
@@ -512,9 +523,11 @@ class AeternumAquaeDialog(QDialog):
         self.progress_bar.setRange(0, 0)
         self.lbl_status.setText("Conectando con Supabase...")
 
+        filter_processed = self.chk_filter_processed.isChecked()
+
         self.worker = StationsFetchWorker(
             self.client, filter_mode, state, municipio, layer_geojson, buffer_meters,
-            selected_cols, calc_intensities, durations, trs
+            selected_cols, calc_intensities, durations, trs, filter_processed
         )
         self.worker.progress.connect(self.lbl_status.setText)
         self.worker.error.connect(self.on_fetch_error)
@@ -529,32 +542,25 @@ class AeternumAquaeDialog(QDialog):
 
     @staticmethod
     def create_qgs_field(col_name, sample_val):
-        # 1. Try PyQt6 QMetaType (QGIS 4)
+        """Creates a QgsField with appropriate data type for QGIS 3 and QGIS 4"""
+        is_int = isinstance(sample_val, int) and not isinstance(sample_val, bool)
+        is_float = isinstance(sample_val, float)
+
         try:
-            from PyQt6.QtCore import QMetaType
-            if isinstance(sample_val, int) and not isinstance(sample_val, bool):
+            from qgis.PyQt.QtCore import QMetaType
+            if is_int:
                 return QgsField(col_name, QMetaType.Type.Int)
-            elif isinstance(sample_val, float):
+            elif is_float:
                 return QgsField(col_name, QMetaType.Type.Double)
             else:
                 return QgsField(col_name, QMetaType.Type.QString)
-        except Exception:
-            pass
-
-        # 2. Try PyQt5 QVariant (QGIS 3)
-        try:
-            from PyQt5.QtCore import QVariant
-            if isinstance(sample_val, int) and not isinstance(sample_val, bool):
+        except (ImportError, AttributeError):
+            if is_int:
                 return QgsField(col_name, QVariant.Int)
-            elif isinstance(sample_val, float):
+            elif is_float:
                 return QgsField(col_name, QVariant.Double)
             else:
                 return QgsField(col_name, QVariant.String)
-        except Exception:
-            pass
-
-        # 3. Direct string fallback
-        return QgsField(col_name)
 
     def on_fetch_finished(self, result):
         self.btn_load_qgis.setEnabled(True)
